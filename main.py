@@ -7,13 +7,14 @@ Start command: uvicorn main:app --host 0.0.0.0 --port 10000
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import librosa
+import aubio
 import numpy as np
 import tempfile
 import os
 from typing import List, Dict
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from pydub import AudioSegment
 
 app = FastAPI(title="Music Label Matcher API")
 
@@ -167,13 +168,46 @@ async def root():
     }
 
 
+def detect_bpm_aubio(file_path: str) -> float:
+    """Lightweight BPM detection using aubio."""
+    # Load audio with pydub (more memory efficient)
+    audio = AudioSegment.from_wav(file_path)
+    
+    # Convert to mono if stereo
+    if audio.channels > 1:
+        audio = audio.set_channels(1)
+    
+    # Downsample to reduce memory
+    audio = audio.set_frame_rate(22050)
+    
+    # Get raw audio data
+    samples = np.array(audio.get_array_of_samples()).astype(np.float32)
+    
+    # Normalize
+    samples = samples / (2**15)
+    
+    # Use aubio tempo detection (lightweight)
+    win_s = 1024
+    hop_s = win_s // 2
+    
+    tempo_detector = aubio.tempo("default", win_s, hop_s, 22050)
+    
+    # Process in chunks to save memory
+    n_frames = len(samples) // hop_s
+    for i in range(0, len(samples) - win_s, hop_s):
+        chunk = samples[i:i + win_s]
+        if len(chunk) == win_s:
+            tempo_detector(chunk)
+    
+    bpm = tempo_detector.get_bpm()
+    return float(bpm) if bpm > 0 else 120.0  # Default to 120 if detection fails
+
+
 @app.post("/analyze")
 async def analyze_track(file: UploadFile = File(...)):
     """
     Analyze an uploaded WAV file and return:
     - tempo (BPM)
-    - spectral_centroid
-    - spectral_bandwidth
     - style classification
     - recommended labels
     """
@@ -191,19 +225,8 @@ async def analyze_track(file: UploadFile = File(...)):
             tmp_file.flush()
             temp_path = tmp_file.name
             
-            # Load audio with librosa
-            y, sr = librosa.load(temp_path, sr=22050)
-            
-            # Extract tempo
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-            tempo = float(tempo)
-            
-            # Extract spectral features
-            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-            spectral_centroid = float(np.mean(spectral_centroids))
-            
-            spectral_bandwidths = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
-            spectral_bandwidth = float(np.mean(spectral_bandwidths))
+            # Detect BPM using lightweight aubio
+            tempo = detect_bpm_aubio(temp_path)
             
             # Classify style
             style = classify_style(tempo)
@@ -213,8 +236,6 @@ async def analyze_track(file: UploadFile = File(...)):
             
             return {
                 "tempo": tempo,
-                "spectral_centroid": spectral_centroid,
-                "spectral_bandwidth": spectral_bandwidth,
                 "style": style,
                 "recommended_labels": recommended_labels
             }
