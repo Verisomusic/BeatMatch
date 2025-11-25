@@ -194,9 +194,9 @@ def detect_bpm_aubio(file_path: str) -> float:
     
     # Process in chunks to save memory
     n_frames = len(samples) // hop_s
-    for i in range(0, len(samples) - win_s, hop_s):
-        chunk = samples[i:i + win_s]
-        if len(chunk) == win_s:
+    for i in range(0, len(samples) - hop_s, hop_s):
+        chunk = samples[i:i + hop_s]
+        if len(chunk) == hop_s:
             tempo_detector(chunk)
     
     bpm = tempo_detector.get_bpm()
