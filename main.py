@@ -169,16 +169,16 @@ async def root():
 
 
 def detect_bpm_aubio(file_path: str) -> float:
-    """Lightweight BPM detection using aubio."""
-    # Load audio with pydub (more memory efficient)
+    """Improved BPM detection using aubio."""
+    # Load audio with pydub
     audio = AudioSegment.from_wav(file_path)
     
     # Convert to mono if stereo
     if audio.channels > 1:
         audio = audio.set_channels(1)
     
-    # Downsample to reduce memory
-    audio = audio.set_frame_rate(22050)
+    # Use higher sample rate for better accuracy
+    audio = audio.set_frame_rate(44100)
     
     # Get raw audio data
     samples = np.array(audio.get_array_of_samples()).astype(np.float32)
@@ -186,21 +186,37 @@ def detect_bpm_aubio(file_path: str) -> float:
     # Normalize
     samples = samples / (2**15)
     
-    # Use aubio tempo detection (lightweight)
-    win_s = 1024
-    hop_s = win_s // 2
+    # Better parameters for tempo detection
+    win_s = 2048  # Larger window for better frequency resolution
+    hop_s = win_s // 4  # Smaller hop for more precision
     
-    tempo_detector = aubio.tempo("default", win_s, hop_s, 22050)
+    # Use specdiff algorithm (better for electronic music)
+    tempo_detector = aubio.tempo("specdiff", win_s, hop_s, 44100)
     
-    # Process in chunks to save memory
-    n_frames = len(samples) // hop_s
+    # Collect all detected beats
+    beat_times = []
     for i in range(0, len(samples) - hop_s, hop_s):
         chunk = samples[i:i + hop_s]
         if len(chunk) == hop_s:
-            tempo_detector(chunk)
+            is_beat = tempo_detector(chunk)
+            if is_beat[0]:
+                beat_times.append(i / 44100.0)
     
+    # Get final BPM
     bpm = tempo_detector.get_bpm()
-    return float(bpm) if bpm > 0 else 120.0  # Default to 120 if detection fails
+    
+    # Handle common half/double tempo issues
+    if bpm > 0:
+        # If BPM is too low, it might be detecting half tempo
+        if bpm < 80:
+            bpm = bpm * 2
+        # If BPM is too high, it might be detecting double tempo
+        elif bpm > 180:
+            bpm = bpm / 2
+    else:
+        bpm = 120.0  # Default fallback
+    
+    return float(bpm)
 
 
 @app.post("/analyze")
